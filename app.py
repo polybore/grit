@@ -15,6 +15,25 @@ if "entries" not in st.session_state:
     st.session_state.entries = []
 if "start_time" not in st.session_state:
     st.session_state.start_time = None
+if "air_temp" not in st.session_state:
+    st.session_state.air_temp = 0
+if "snow" not in st.session_state:
+    st.session_state.snow = "No"
+if "plough" not in st.session_state:
+    st.session_state.plough = "No"
+if "grit" not in st.session_state:
+    st.session_state.grit = "No"
+if "entry_added" not in st.session_state:
+    st.session_state.entry_added = False
+
+# If an entry was just added, reset the form
+if st.session_state.entry_added:
+    st.session_state.start_time = None
+    st.session_state.air_temp = 0
+    st.session_state.snow = "No"
+    st.session_state.plough = "No"
+    st.session_state.grit = "No"
+    st.session_state.entry_added = False
 
 st.title("Winter Maintenance Record")
 
@@ -26,21 +45,24 @@ if st.button("Start"):
     st.session_state.start_time = datetime.now().strftime("%H:%M")
     st.rerun()
 
-# Data entry form
-with st.form("data_form"):
-    st.write(f"Entering data for: **{location}**")
-    
-    start_time_display = st.session_state.start_time if st.session_state.start_time else "Not started"
-    st.write(f"Entry started at: **{start_time_display}**")
+# Data entry section
+st.write(f"Entering data for: **{location}**")
 
-    air_temp = st.number_input("Air Temperature (°C)", step=1)
-    snow = st.radio("Snow Present?", ["Yes", "No"], index=1)
-    plough = st.radio("Plough Used?", ["Yes", "No"], index=1)
-    grit = st.radio("Grit Spread?", ["Yes", "No"], index=1)
-    add_entry = st.form_submit_button("Add Entry")
+start_time_display = st.session_state.start_time if st.session_state.start_time else "Not started"
+st.write(f"Entry started at: **{start_time_display}**")
 
-# Handle form submission
-if add_entry:
+# Use session state to store widget values immediately
+snow_options = ["Yes", "No"]
+plough_options = ["Yes", "No"]
+grit_options = ["Yes", "No"]
+
+st.number_input("Air Temperature (°C)", key="air_temp", step=1)
+st.radio("Snow Present?", snow_options, key="snow", index=snow_options.index(st.session_state.snow))
+st.radio("Plough Used?", plough_options, key="plough", index=plough_options.index(st.session_state.plough))
+st.radio("Grit Spread?", grit_options, key="grit", index=grit_options.index(st.session_state.grit))
+
+# "Add Entry" button now reads from session state
+if st.button("Add Entry"):
     if st.session_state.start_time is None:
         st.error("Please click 'Start' before adding an entry.")
     else:
@@ -52,14 +74,13 @@ if add_entry:
             "Start Time": st.session_state.start_time,
             "Finish Time": finish_time,
             "Location": location,
-            "Air Temp": air_temp,
-            "Snow": snow,
-            "Plough": plough,
-            "Grit": grit
+            "Air Temp": st.session_state.air_temp,
+            "Snow": st.session_state.snow,
+            "Plough": st.session_state.plough,
+            "Grit": st.session_state.grit
         })
-        
-        # Reset start_time for the next entry
-        st.session_state.start_time = None
+
+        st.session_state.entry_added = True
         st.success("Entry added successfully!")
         st.rerun()
 
@@ -113,7 +134,7 @@ if st.session_state.entries:
     if st.download_button(
         label="Download Word File",
         data=word_file,
-        file_name="Geographic_Report.docx",
+        file_name=f"grit_report_{datetime.now().strftime('%Y-%m-%d')}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ):
         st.session_state.entries = []
