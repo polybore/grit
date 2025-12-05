@@ -3,16 +3,28 @@ from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches
 from io import BytesIO
+from supabase import create_client, Client
 
-# Predefined locations
+# --- Supabase Initialization ---
+def init_supabase_client():
+    """Initializes and returns the Supabase client if credentials are set."""
+    if "supabase" in st.secrets and st.secrets["supabase"]["url"] and st.secrets["supabase"]["key"]:
+        supabase_url = st.secrets["supabase"]["url"]
+        supabase_key = st.secrets["supabase"]["key"]
+        return create_client(supabase_url, supabase_key)
+    else:
+        st.error("Supabase credentials are not set. Please add them to your Streamlit secrets.")
+        return None
+
+supabase: Client = init_supabase_client()
+
+# --- Predefined Locations ---
 LOCATIONS = [
     "Chalmers", "Bay View Dental", "Portsoy Medical",
     "Fraserburgh Hospital", "Ugie Hospital", "Peterhead Hospital", "Macduff Vaccination"
 ]
 
-# Initialize session state
-if "entries" not in st.session_state:
-    st.session_state.entries = []
+# --- Session State for Form Inputs ---
 if "start_time" not in st.session_state:
     st.session_state.start_time = None
 if "air_temp" not in st.session_state:
@@ -26,7 +38,7 @@ if "grit" not in st.session_state:
 if "entry_added" not in st.session_state:
     st.session_state.entry_added = False
 
-# If an entry was just added, reset the form
+# Reset form if an entry was just added
 if st.session_state.entry_added:
     st.session_state.start_time = None
     st.session_state.air_temp = 0
@@ -34,24 +46,21 @@ if st.session_state.entry_added:
     st.session_state.plough = "No"
     st.session_state.grit = "No"
     st.session_state.entry_added = False
+    st.rerun()
 
 st.title("Winter Maintenance Record")
 
-# Location selector is outside the form
+# --- Data Entry Form ---
 location = st.selectbox("Select Location", LOCATIONS)
 
-# Manual start button
 if st.button("Start"):
     st.session_state.start_time = datetime.now().strftime("%H:%M")
     st.rerun()
 
-# Data entry section
 st.write(f"Entering data for: **{location}**")
-
 start_time_display = st.session_state.start_time if st.session_state.start_time else "Not started"
 st.write(f"Entry started at: **{start_time_display}**")
 
-# Use session state to store widget values immediately
 snow_options = ["Yes", "No"]
 plough_options = ["Yes", "No"]
 grit_options = ["Yes", "No"]
@@ -61,81 +70,102 @@ st.radio("Snow Present?", snow_options, key="snow", index=snow_options.index(st.
 st.radio("Plough Used?", plough_options, key="plough", index=plough_options.index(st.session_state.plough))
 st.radio("Grit Spread?", grit_options, key="grit", index=grit_options.index(st.session_state.grit))
 
-# "Add Entry" button now reads from session state
 if st.button("Add Entry"):
     if st.session_state.start_time is None:
         st.error("Please click 'Start' before adding an entry.")
-    else:
+    elif supabase:
         finish_time = datetime.now().strftime("%H:%M")
         date_today = datetime.now().strftime("%d-%m-%Y")
 
-        st.session_state.entries.append({
-            "Date": date_today,
-            "Start Time": st.session_state.start_time,
-            "Finish Time": finish_time,
-            "Location": location,
-            "Air Temp": st.session_state.air_temp,
-            "Snow": st.session_state.snow,
-            "Plough": st.session_state.plough,
-            "Grit": st.session_state.grit
-        })
+        new_entry = {
+            "date": date_today,
+            "start_time": st.session_state.start_time,
+            "finish_time": finish_time,
+            "location": location,
+            "air_temp": st.session_state.air_temp,
+            "snow": st.session_state.snow,
+            "plough": st.session_state.plough,
+            "grit": st.session_state.grit
+        }
+        
+        try:
+            supabase.table("winter_maintenance").insert(new_entry).execute()
+            st.session_state.entry_added = True
+            st.success("Entry added successfully to Supabase!")
+        except Exception as e:
+            st.error(f"Failed to add entry to Supabase: {e}")
 
-        st.session_state.entry_added = True
-        st.success("Entry added successfully!")
-        st.rerun()
+# --- Display Entries and Download Option ---
+if supabase:
+    try:
+        response = supabase.table("winter_maintenance").select("*").order("created_at", desc=True).execute()
+        entries = response.data
+        
+        if entries:
+            st.subheader("Current Entries from Supabase")
+            # Prepare data for display (e.g., format dates, select columns)
+            display_entries = [
+                {
+                    "Date": e["date"], "Start Time": e["start_time"], "Finish Time": e["finish_time"],
+                    "Location": e["location"], "Air Temp": e["air_temp"], "Snow": e["snow"],
+                    "Plough": e["plough"], "Grit": e["grit"]
+                } for e in entries
+            ]
+            st.table(display_entries)
 
-# Display entries and download option
-if st.session_state.entries:
-    st.subheader("Current Entries")
-    st.table(st.session_state.entries)
+            # --- Word Document Creation ---
+            def create_word(entries_data):
+                doc = Document()
+                doc.add_heading("Winter Maintenance Record", 0)
+                table = doc.add_table(rows=1, cols=8)
+                table.columns[3].width = Inches(1.2)
+                hdr_cells = table.rows[0].cells
+                headers = ['Date', 'Start Time', 'Finish Time', 'Location', 'Air Temp', 'Snow', 'Plough Used', 'Grit Spread']
+                for i, header in enumerate(headers):
+                    hdr_cells[i].text = header
+                
+                for entry in entries_data:
+                    row_cells = table.add_row().cells
+                    row_cells[0].text = entry["date"]
+                    row_cells[1].text = entry["start_time"]
+                    row_cells[2].text = entry["finish_time"]
+                    p = row_cells[3].paragraphs[0]
+                    run = p.add_run(entry["location"])
+                    run.font.size = Pt(8)
+                    row_cells[4].text = str(entry["air_temp"])
+                    row_cells[5].text = entry["snow"]
+                    row_cells[6].text = entry["plough"]
+                    row_cells[7].text = entry["grit"]
 
-    # Function to create Word document
-    def create_word(entries):
-        doc = Document()
-        doc.add_heading("Winter Maintenance Record", 0)
+                buffer = BytesIO()
+                doc.save(buffer)
+                buffer.seek(0)
+                return buffer
 
-        # Create table with headers
-        table = doc.add_table(rows=1, cols=8)
-        # Set width for the 'Location' column (index 3)
-        table.columns[3].width = Inches(1.2)
-        hdr_cells = table.rows[0].cells
-        headers = [
-            'Date', 'Start Time', 'Finish Time', 'Location',
-            'Air Temp', 'Snow', 'Plough Used', 'Grit Spread'
-        ]
-        for i, header in enumerate(headers):
-            hdr_cells[i].text = header
-
-        # Populate table rows
-        for entry in entries:
-            row_cells = table.add_row().cells
-            row_cells[0].text = entry["Date"]
-            row_cells[1].text = entry["Start Time"]
-            row_cells[2].text = entry["Finish Time"]
+            word_file = create_word(entries)
             
-            # Set font size for location to prevent wrapping
-            location_cell = row_cells[3]
-            p = location_cell.paragraphs[0]
-            run = p.add_run(entry["Location"])
-            run.font.size = Pt(8)
+            # --- Download and Clear Buttons ---
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.download_button(
+                    label="Download as Word",
+                    data=word_file,
+                    file_name=f"grit_report_{datetime.now().strftime('%Y-%m-%d')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            
+            with col2:
+                if st.button("Clear All Entries from Database"):
+                    try:
+                        # In a real-world app, you might want a confirmation modal here
+                        # For simplicity, we directly delete.
+                        supabase.table("winter_maintenance").delete().gt("id", 0).execute()
+                        st.success("All entries have been cleared from the database!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to clear entries: {e}")
 
-            row_cells[4].text = str(entry["Air Temp"])
-            row_cells[5].text = entry["Snow"]
-            row_cells[6].text = entry["Plough"]
-            row_cells[7].text = entry["Grit"]
-
-        buffer = BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
-        return buffer
-
-    # Download button
-    word_file = create_word(st.session_state.entries)
-    if st.download_button(
-        label="Download Word File",
-        data=word_file,
-        file_name=f"grit_report_{datetime.now().strftime('%Y-%m-%d')}.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    ):
-        st.session_state.entries = []
-        st.success("Entries have been cleared after download!")
+    except Exception as e:
+        st.error(f"Error fetching data from Supabase: {e}")
+        st.info("Please ensure your Supabase table 'winter_maintenance' is created and credentials are correct.")
